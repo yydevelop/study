@@ -101,6 +101,8 @@ def convolution_forward(x, W, b, pad, stride):
     col = im2col(x, FH, FW, stride, pad)
 
     # フィルタを2次元配列に変換する
+    print(W.reshape(FN, -1))
+    print(W.reshape(FN, -1).T)
     col_W = W.reshape(FN, -1).T
 
     # 行列の積を計算し、バイアスを足す

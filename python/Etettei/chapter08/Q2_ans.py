@@ -10,6 +10,9 @@ def init_centroid(X, n_data, k):
 def compute_distances(X, k, n_data, centroids):
     distances = np.zeros((n_data, k))
     for idx_centroids in range(k):
+        print(X)
+        print(centroids[idx_centroids])
+        print(X - centroids[idx_centroids])
         dist = np.sqrt(np.sum((X - centroids[idx_centroids]) ** 2, axis=1))
         distances[:, idx_centroids] = dist
     return distances

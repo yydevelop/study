@@ -12,6 +12,9 @@ class Softmax:
 
     def backward(self, dout):
         dx = self.out*dout
+        print("self.out\n", dout)    
+        print("dout\n", dout)    
+        print("dx\n", dx)    
         sumdx = np.sum(dx,axis=1,keepdims=True)
         dx -= self.out*sumdx
         return dx

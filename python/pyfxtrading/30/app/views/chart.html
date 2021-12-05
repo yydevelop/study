@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Chart</title>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+    <script type="text/javascript">
+        function send() {
+            var params = {
+                "product_code": "USD_JPY",
+                "limit": 10,
+                "duration": "5s"
+            };
+            $.get("/api/candle/", params).done(function (data) {
+                console.log(data);
+                let candles = data["candles"];
+                $("#dashboard_div").append(candles[0].open + "<br>")
+            })
+        }
+        setInterval(send, 1000 * 3);
+        window.onload = function(){
+            send();
+        }
+    </script>
+
+</head>
+<body>
+
+<div id="dashboard_div"></div>
+
+</body>
+</html>

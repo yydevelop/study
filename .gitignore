@@ -1,0 +1,5 @@
+
+*.txt
+bot/__pycache__/settings.cpython-39.pyc
+bot/.vscode/launch.json
+*.csv

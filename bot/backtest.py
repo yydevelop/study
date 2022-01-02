@@ -4,11 +4,14 @@ import time
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
-
+import pickle
+import lightgbm as lgb
+import talib
+import joblib
 
 #--------設定項目--------
 
-chart_sec = 3600           #  １時間足を使用
+chart_sec = 60 * 15        #  15分足を使用
 buy_term =  30             #  買いエントリーのブレイク期間の設定
 sell_term = 30             #  売りエントリーのブレイク期間の設定
 
@@ -28,7 +31,7 @@ start_funds = 1000000      # シミュレーション時の初期資金
 entry_times = 2            # 何回に分けて追加ポジションを取るか
 entry_range = 1            # 何レンジごとに追加ポジションを取るか
 
-stop_config = "TRAILING"   # ON / OFF / TRAILING の３つが設定可
+stop_config = "OFF"        # ON / OFF / TRAILING の３つが設定可
 stop_AF = 0.02             # 加速係数
 stop_AF_add = 0.02         # 加速係数を増やす度合
 stop_AF_max = 0.2          # 加速係数の上限
@@ -38,6 +41,129 @@ filter_VER = "A"           # OFFで無効
 
 wait = 0                   #  ループの待機時間
 slippage = 0.001           #  手数料・スリッページ
+
+
+#-------------------------------------------------------------------------------
+
+def calc_features(df):
+	open = df['open_price']
+	high = df['high_price']
+	low = df['low_price']
+	close = df['close_price']
+	volume = df['volume']
+
+	orig_columns = df.columns
+
+	hilo = (df['high_price'] + df['low_price']) / 2
+	df['BBANDS_upperband'], df['BBANDS_middleband'], df['BBANDS_lowerband'] = talib.BBANDS(close, timeperiod=5, nbdevup=2, nbdevdn=2, matype=0)
+	df['BBANDS_upperband'] -= hilo
+	df['BBANDS_middleband'] -= hilo
+	df['BBANDS_lowerband'] -= hilo
+	df['DEMA'] = talib.DEMA(close, timeperiod=30) - hilo
+	df['EMA'] = talib.EMA(close, timeperiod=30) - hilo
+	df['HT_TRENDLINE'] = talib.HT_TRENDLINE(close) - hilo
+	df['KAMA'] = talib.KAMA(close, timeperiod=30) - hilo
+	df['MA'] = talib.MA(close, timeperiod=30, matype=0) - hilo
+	df['MIDPOINT'] = talib.MIDPOINT(close, timeperiod=14) - hilo
+	df['SMA'] = talib.SMA(close, timeperiod=30) - hilo
+	df['T3'] = talib.T3(close, timeperiod=5, vfactor=0) - hilo
+	df['TEMA'] = talib.TEMA(close, timeperiod=30) - hilo
+	df['TRIMA'] = talib.TRIMA(close, timeperiod=30) - hilo
+	df['WMA'] = talib.WMA(close, timeperiod=30) - hilo
+
+	df['ADX'] = talib.ADX(high, low, close, timeperiod=14)
+	df['ADXR'] = talib.ADXR(high, low, close, timeperiod=14)
+	df['APO'] = talib.APO(close, fastperiod=12, slowperiod=26, matype=0)
+	df['AROON_aroondown'], df['AROON_aroonup'] = talib.AROON(high, low, timeperiod=14)
+	df['AROONOSC'] = talib.AROONOSC(high, low, timeperiod=14)
+	df['BOP'] = talib.BOP(open, high, low, close)
+	df['CCI'] = talib.CCI(high, low, close, timeperiod=14)
+	df['DX'] = talib.DX(high, low, close, timeperiod=14)
+	df['MACD_macd'], df['MACD_macdsignal'], df['MACD_macdhist'] = talib.MACD(close, fastperiod=12, slowperiod=26, signalperiod=9)
+	# skip MACDEXT MACDFIX たぶん同じなので
+	df['MFI'] = talib.MFI(high, low, close, volume, timeperiod=14)
+	df['MINUS_DI'] = talib.MINUS_DI(high, low, close, timeperiod=14)
+	df['MINUS_DM'] = talib.MINUS_DM(high, low, timeperiod=14)
+	df['MOM'] = talib.MOM(close, timeperiod=10)
+	df['PLUS_DI'] = talib.PLUS_DI(high, low, close, timeperiod=14)
+	df['PLUS_DM'] = talib.PLUS_DM(high, low, timeperiod=14)
+	df['RSI'] = talib.RSI(close, timeperiod=14)
+	df['STOCH_slowk'], df['STOCH_slowd'] = talib.STOCH(high, low, close, fastk_period=5, slowk_period=3, slowk_matype=0, slowd_period=3, slowd_matype=0)
+	df['STOCHF_fastk'], df['STOCHF_fastd'] = talib.STOCHF(high, low, close, fastk_period=5, fastd_period=3, fastd_matype=0)
+	df['STOCHRSI_fastk'], df['STOCHRSI_fastd'] = talib.STOCHRSI(close, timeperiod=14, fastk_period=5, fastd_period=3, fastd_matype=0)
+	df['TRIX'] = talib.TRIX(close, timeperiod=30)
+	df['ULTOSC'] = talib.ULTOSC(high, low, close, timeperiod1=7, timeperiod2=14, timeperiod3=28)
+	df['WILLR'] = talib.WILLR(high, low, close, timeperiod=14)
+
+	df['AD'] = talib.AD(high, low, close, volume)
+	df['ADOSC'] = talib.ADOSC(high, low, close, volume, fastperiod=3, slowperiod=10)
+	df['OBV'] = talib.OBV(close, volume)
+
+	df['ATR'] = talib.ATR(high, low, close, timeperiod=14)
+	df['NATR'] = talib.NATR(high, low, close, timeperiod=14)
+	df['TRANGE'] = talib.TRANGE(high, low, close)
+
+	df['HT_DCPERIOD'] = talib.HT_DCPERIOD(close)
+	df['HT_DCPHASE'] = talib.HT_DCPHASE(close)
+	df['HT_PHASOR_inphase'], df['HT_PHASOR_quadrature'] = talib.HT_PHASOR(close)
+	df['HT_SINE_sine'], df['HT_SINE_leadsine'] = talib.HT_SINE(close)
+	df['HT_TRENDMODE'] = talib.HT_TRENDMODE(close)
+
+	df['BETA'] = talib.BETA(high, low, timeperiod=5)
+	df['CORREL'] = talib.CORREL(high, low, timeperiod=30)
+	df['LINEARREG'] = talib.LINEARREG(close, timeperiod=14) - close
+	df['LINEARREG_ANGLE'] = talib.LINEARREG_ANGLE(close, timeperiod=14)
+	df['LINEARREG_INTERCEPT'] = talib.LINEARREG_INTERCEPT(close, timeperiod=14) - close
+	df['LINEARREG_SLOPE'] = talib.LINEARREG_SLOPE(close, timeperiod=14)
+	df['STDDEV'] = talib.STDDEV(close, timeperiod=5, nbdev=1)
+
+	return df
+
+def backtest(cl=None, hi=None, lo=None, pips=None,
+              buy_entry=None, sell_entry=None,
+              buy_cost=None, sell_cost=None
+            ):
+    n = cl.size
+    y = cl.copy() * 0.0
+    poss = cl.copy() * 0.0
+    ret = 0.0
+    pos = 0.0
+    for i in range(n):
+        prev_pos = pos
+        
+        # exit
+        if buy_cost[i]:
+            vol = np.maximum(0, -prev_pos)
+            ret -= buy_cost[i] * vol
+            pos += vol
+
+        if sell_cost[i]:
+            vol = np.maximum(0, prev_pos)
+            ret -= sell_cost[i] * vol
+            pos -= vol
+
+        # entry
+        if buy_entry[i] and buy_cost[i]:
+            vol = np.minimum(1.0, 1 - prev_pos) * buy_entry[i]
+            ret -= buy_cost[i] * vol
+            pos += vol
+
+        if sell_entry[i] and sell_cost[i]:
+            vol = np.minimum(1.0, prev_pos + 1) * sell_entry[i]
+            ret -= sell_cost[i] * vol
+            pos -= vol
+        
+        if i + 1 < n:
+            ret += pos * (cl[i + 1] / cl[i] - 1)
+            
+        y[i] = ret
+        poss[i] = pos
+        
+    return y, poss
+
+model_y_buy = joblib.load("./bot/model_y_buy.xz")
+model_y_sell = joblib.load("./bot/model_y_sell.xz")
+#-------------------------------------------------------------------------------
 
 
 #-------------補助ツールの関数--------------
@@ -62,7 +188,8 @@ def get_price(min, before=0, after=0):
 					"open_price" : i[1],
 					"high_price" : i[2],
 					"low_price" : i[3],
-					"close_price": i[4] })
+					"close_price": i[4],
+					"volume": i[5] })
 		return price
 		
 	else:
@@ -335,31 +462,61 @@ def trail_stop( data,flag ):
 
 #-------------売買ロジックの部分の関数--------------
 
-# ドンチャンブレイクを判定する関数
-def donchian( data,last_data ):
+# # ドンチャンブレイクを判定する関数
+# def donchian( data,last_data ):
 	
-	highest = max(i["high_price"] for i in last_data[ (-1* buy_term): ])
-	if data[ judge_price["BUY"] ] > highest:
-		return {"side":"BUY","price":highest}
+# 	highest = max(i["high_price"] for i in last_data[ (-1* buy_term): ])
+# 	if data[ judge_price["BUY"] ] > highest:
+# 		return {"side":"BUY","price":highest}
 	
-	lowest = min(i["low_price"] for i in last_data[ (-1* sell_term): ])
-	if data[ judge_price["SELL"] ] < lowest:
-		return {"side":"SELL","price":lowest}
+# 	lowest = min(i["low_price"] for i in last_data[ (-1* sell_term): ])
+# 	if data[ judge_price["SELL"] ] < lowest:
+# 		return {"side":"SELL","price":lowest}
+	
+# 	return {"side" : None , "price":0}
+
+
+def mlpredict(data):
+	df_i = pd.DataFrame(data,index=[0])
+	# 予測
+	df_i['y_pred_buy'] = model_y_buy.predict(df_i[features])
+	df_i['y_pred_sell'] = model_y_sell.predict(df_i[features])
+
+	# 呼び値 (取引所、取引ペアごとに異なるので、適切に設定してください)
+	pips = 1
+
+	# ATRで指値距離を計算します
+	limit_price_dist = df_i['ATR'] * 0.5
+	limit_price_dist = np.maximum(1, (limit_price_dist / pips).round().fillna(1)) * pips
+
+	# 終値から両側にlimit_price_distだけ離れたところに、買い指値と売り指値を出します
+	buy_price = df_i['close_price'] - limit_price_dist
+	sell_price = df_i['close_price'] + limit_price_dist
+
+	# 予測結果
+	pred_buy = df_i['y_pred_buy'].iloc[-1]
+	pred_sell = df_i['y_pred_sell'].iloc[-1]
+	print(pred_buy,pred_sell)
+
+	if pred_buy > 0 and pred_buy>=pred_sell:
+		return {"side":"BUY","price":buy_price}
+	
+	if pred_sell > 0 and pred_sell>=pred_buy:
+		return {"side":"SELL","price":sell_price}
 	
 	return {"side" : None , "price":0}
 
-
 # エントリー注文を出す関数
-def entry_signal( data,last_data,flag ):
-	signal = donchian( data,last_data )
+def entry_signal( data,flag ):
+	signal = mlpredict(data)
 	
 	if signal["side"] == "BUY":
-		flag["records"]["log"].append("過去{0}足の最高値{1}円を、直近の価格が{2}円でブレイクしました\n".format(buy_term,signal["price"],data[judge_price["BUY"]]))
+		# flag["records"]["log"].append("過去{0}足の最高値{1}円を、直近の価格が{2}円でブレイクしました\n".format(buy_term,signal["price"],data[judge_price["BUY"]]))
 		
-		# フィルター条件を確認
-		if filter( signal ) == False:
-			flag["records"]["log"].append("フィルターのエントリー条件を満たさなかったため、エントリーしません\n")
-			return flag
+		# # フィルター条件を確認
+		# if filter( signal ) == False:
+		# 	flag["records"]["log"].append("フィルターのエントリー条件を満たさなかったため、エントリーしません\n")
+		# 	return flag
 		
 		lot,stop,flag = calculate_lot( last_data,data,flag )
 		if lot > 0.01:
@@ -376,12 +533,12 @@ def entry_signal( data,last_data,flag ):
 			flag["records"]["log"].append("注文可能枚数{}が、最低注文単位に満たなかったので注文を見送ります\n".format(lot))
 
 	if signal["side"] == "SELL":
-		flag["records"]["log"].append("過去{0}足の最安値{1}円を、直近の価格が{2}円でブレイクしました\n".format(sell_term,signal["price"],data[judge_price["SELL"]]))
+		# flag["records"]["log"].append("過去{0}足の最安値{1}円を、直近の価格が{2}円でブレイクしました\n".format(sell_term,signal["price"],data[judge_price["SELL"]]))
 		
-		# フィルター条件を確認
-		if filter( signal ) == False:
-			flag["records"]["log"].append("フィルターのエントリー条件を満たさなかったため、エントリーしません\n")
-			return flag
+		# # フィルター条件を確認
+		# if filter( signal ) == False:
+		# 	flag["records"]["log"].append("フィルターのエントリー条件を満たさなかったため、エントリーしません\n")
+		# 	return flag
 		
 		lot,stop,flag = calculate_lot( last_data,data,flag )
 		if lot > 0.01:
@@ -408,11 +565,11 @@ def close_position( data,last_data,flag ):
 		return flag
 	
 	flag["position"]["count"] += 1
-	signal = donchian( data,last_data )
+	signal = mlpredict( data,last_data )
 	
 	if flag["position"]["side"] == "BUY":
 		if signal["side"] == "SELL":
-			flag["records"]["log"].append("過去{0}足の最安値{1}円を、直近の価格が{2}円でブレイクしました\n".format(sell_term,signal["price"],data[judge_price["SELL"]]))
+			#flag["records"]["log"].append("過去{0}足の最安値{1}円を、直近の価格が{2}円でブレイクしました\n".format(sell_term,signal["price"],data[judge_price["SELL"]]))
 			flag["records"]["log"].append(str(data["close_price"]) + "円あたりで成行注文を出してポジションを決済します\n")
 			
 			# 決済の成行注文コードを入れる
@@ -582,7 +739,7 @@ def records(flag,data,close_price,close_type=None):
 
 
 # バックテストの集計用の関数
-def backtest(flag):
+def backtest_count(flag):
 	
 	# 成績を記録したpandas DataFrameを作成
 	records = pd.DataFrame({
@@ -781,37 +938,121 @@ flag = {
 }
 
 
+df = pd.DataFrame(price)
+# df=df.rename(columns={
+# 		"close_time_dt" : "timestamp",
+# 		# "open_price" : "op",
+# 		# "high_price" : "hi",
+# 		# "low_price" : "lo",
+# 		# "close_price": "cl",
+# 		# "volume": "volume",
+# })
+df['close_time_dt'] = pd.to_datetime(df['close_time_dt'])
+df['timestamp'] = df['close_time_dt']
+# df['cl'] = df['cl'].astype(np.float64)
+# df['op'] = df['op'].astype(np.float64)
+# df['hi'] = df['hi'].astype(np.float64)
+# df['lo'] = df['lo'].astype(np.float64)
+# df['cl'] = df['cl'].astype(np.float64)
+df["open_price"] = df["open_price"].astype(np.float64)
+df["high_price"] = df["high_price"].astype(np.float64)
+df["low_price"] = df["low_price"].astype(np.float64)
+df["close_price"] = df["close_price"].astype(np.float64)
+df['volume'] = df['volume'].astype(np.float64)
+
+# df = df.set_index('timestamp')
+# df = df[[
+# 		"op",
+# 		"hi",
+# 		"lo",
+# 		"cl",
+# 		"volume",
+# ]]
+df = calc_features(df)
+
+features = sorted([
+    'ADX',
+    'ADXR',
+    'APO',
+    'AROON_aroondown',
+    'AROON_aroonup',
+    'AROONOSC',
+    'CCI',
+    'DX',
+    'MACD_macd',
+    'MACD_macdsignal',
+    'MACD_macdhist',
+    'MFI',
+#     'MINUS_DI',
+#     'MINUS_DM',
+    'MOM',
+#     'PLUS_DI',
+#     'PLUS_DM',
+    'RSI',
+    'STOCH_slowk',
+    'STOCH_slowd',
+    'STOCHF_fastk',
+#     'STOCHRSI_fastd',
+    'ULTOSC',
+    'WILLR',
+#     'ADOSC',
+#     'NATR',
+    'HT_DCPERIOD',
+    'HT_DCPHASE',
+    'HT_PHASOR_inphase',
+    'HT_PHASOR_quadrature',
+    'HT_TRENDMODE',
+    'BETA',
+    'LINEARREG',
+    'LINEARREG_ANGLE',
+    'LINEARREG_INTERCEPT',
+    'LINEARREG_SLOPE',
+    'STDDEV',
+    'BBANDS_upperband',
+    'BBANDS_middleband',
+    'BBANDS_lowerband',
+    'DEMA',
+    'EMA',
+    'HT_TRENDLINE',
+    'KAMA',
+    'MA',
+    'MIDPOINT',
+    'T3',
+    'TEMA',
+    'TRIMA',
+    'WMA',
+])
+
+price = df.to_dict('records')
+
+
 last_data = []
 need_term = max(buy_term,sell_term,volatility_term)
 i = 0
-while i < len(price):
-
-	# ドンチャンの判定に使う期間分の安値・高値データを準備する
-	if len(last_data) < need_term:
-		last_data.append(price[i])
-		flag = log_price(price[i],flag)
-		time.sleep(wait)
-		i += 1
-		continue
-	
+#while i < len(price):
+while i < 500:
 	data = price[i]
-	flag = log_price(data,flag)
-	
+	df_i = pd.DataFrame(data,index=[i])
+
 	# ポジションがある場合
 	if flag["position"]["exist"]:
 		if stop_config != "OFF":
 			flag = stop_position( data,flag )
-		flag = close_position( data,last_data,flag )
+		flag = close_position( data,flag )
 		flag = add_position( data,flag )
 	
 	# ポジションがない場合
 	else:
-		flag = entry_signal( data,last_data,flag )
+		#flag = entry_signal( data,last_data,flag )
+		flag = entry_signal(data,flag)
 	
+
 	last_data.append( data )
 	i += 1
+
 	time.sleep(wait)
 
+print(flag)
 
 print("--------------------------")
 print("テスト期間：")
@@ -820,4 +1061,26 @@ print("終了時点 : " + str(price[-1]["close_time_dt"]))
 print(str(len(price)) + "件のローソク足データで検証")
 print("--------------------------")
 
-backtest(flag)
+
+backtest_count(flag)
+
+
+# OOS予測値を計算
+def my_cross_val_predict(estimator, X, y=None, cv=None):
+    y_pred = y.copy()
+    y_pred[:] = np.nan
+    for train_idx, val_idx in cv:
+        estimator.fit(X[train_idx], y[train_idx])
+        y_pred[val_idx] = estimator.predict(X[val_idx])
+    return y_pred
+
+
+
+# モデルの読み込み
+model_y_buy = joblib.load('./bot/model_y_buy.xz')
+model_y_sell = joblib.load('./bot/model_y_sell.xz')
+
+df['y_pred_buy'] = model_y_buy.predict(df[features])
+df['y_pred_sell'] = model_y_sell.predict(df[features])
+
+print(df[['close_time_dt','y_pred_buy','y_pred_sell']])
